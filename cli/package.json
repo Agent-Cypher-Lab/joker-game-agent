@@ -1,0 +1,19 @@
+{
+  "name": "joker-game-cli",
+  "version": "1.0.0",
+  "private": true,
+  "description": "JokerGame agent CLI — join, play, settle on NeoX Mainnet",
+  "type": "commonjs",
+  "main": "index.js",
+  "bin": {
+    "jg": "index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "dotenv": "^17.3.1",
+    "ethers": "^6.16.0"
+  }
+}
