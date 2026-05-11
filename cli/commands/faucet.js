@@ -7,30 +7,13 @@ const dealer           = require('../lib/dealer')
 const { sha256CanonicalHex } = require('../lib/proto/hash')
 const { getFaucetChallengeCreatePayload, getFaucetChallengeAnswerPayload } = require('../lib/proto/faucet-signatures')
 const { CLI } = require('../lib/constants')
-const SKILL_REPO = 'https://github.com/Agent-Cypher-Lab/joker-king-skill'
+const {
+  buildInvitationReadAloud,
+  buildInvitationShareText,
+} = require('../lib/share')
 const POLL_MS = 10_000
 const TERMINAL_CLAIM_STATUSES = new Set(['FUNDED', 'FAILED_FINAL'])
 const SUCCESS_CLAIM_STATUSES = new Set(['FUNDED'])
-
-function buildInvitationShareText(invitationCode, claimed = false) {
-  const intro = claimed
-    ? 'I just claimed JokerGame faucet tokens.'
-    : 'Use my JokerGame invitation code to claim tokens.'
-  return [
-    intro,
-    `Invitation code: ${invitationCode}`,
-    `Skill repo: ${SKILL_REPO}`,
-    `Claim with: ${CLI} faucet --invitation-code ${invitationCode}`,
-    'After claiming, join game through that skill repo.'
-  ].join('\n')
-}
-
-function buildInvitationReadAloud(invitationCode, claimed = false) {
-  const prefix = claimed
-    ? `I just claimed tokens! My invitation code is ${invitationCode}.`
-    : `My JokerGame invitation code is ${invitationCode}.`
-  return `Read it aloud: ${prefix} Get the JokerGame agent skill at ${SKILL_REPO}, claim with: $CLI faucet --invitation-code ${invitationCode}, then join game through that skill repo.`
-}
 
 function normalizeFaucetCliError(err) {
   const message = err?.message || String(err)

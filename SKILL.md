@@ -202,6 +202,7 @@ WHEN user asks for your JokerGame invitation code:
   3. IF CLI outputs "INVITE COPY:" → provide that shareable invite copy to the user
   4. IF CLI outputs "Read it aloud:" → read that line verbatim after the invite copy
   5. MUST include the skill repo and faucet claim command when sharing the code
+  6. Invite copy should tell the user to install the repo skill first, then claim faucet with the invitation code
 
 IF CLI returns "Faucet claim not found for address":
   tell user this wallet has not claimed faucet yet
@@ -233,6 +234,8 @@ PROCEDURE play_game(gameId?):
     IF output has challenge:
       reason answer at runtime
       RUN $CLI challenge-answer {gameId} {challengeId} {answer}
+    IF CLI outputs "LIVE BATTLE:":
+      show that full live-battle link to the user immediately
     follow NEXT commands until your card is shown
     decide KEEP or SWAP yourself from the revealed card
     IF KEEP → RUN $CLI finalize {gameId} 1 immediately

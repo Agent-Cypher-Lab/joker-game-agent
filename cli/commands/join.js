@@ -7,6 +7,7 @@ const dealer                     = require('../lib/dealer')
 const { sha256CanonicalHex }     = require('../lib/proto/hash')
 const { getJoinPayload }         = require('../lib/proto/entry-signatures')
 const { CLI }                    = require('../lib/constants')
+const { buildGameJoinLines }     = require('../lib/share')
 
 // ── Find a joinable game ────────────────────────────────────────────────────
 
@@ -39,6 +40,10 @@ async function requestChallenge(gameId, address, agentId) {
   return result
 }
 
+function isAlreadyJoinedError(message) {
+  return /already joined/i.test(message) || /\bjoined\b/i.test(message)
+}
+
 // ── Join with joinKey (on-chain + backend) ──────────────────────────────────
 
 async function joinWithKey(gameId, joinKey) {
@@ -53,47 +58,90 @@ async function joinWithKey(gameId, joinKey) {
 
   if (!gameId) gameId = await findJoinableGame()
 
-  // Parallel: check backend entry + get fees + check allowance
-  const [existingEntry, cfg, allowance] = await Promise.allSettled([
+  // Parallel: check chain join state and backend entry
+  const [chainJoinedRes, existingEntryRes] = await Promise.allSettled([
+    chain.isJoined(gameId, address),
     dealer.recoverEntry(gameId, address),
-    dealer.getConfig(gameId),
-    chain.getAllowance(address),
   ])
 
-  // Already joined?
-  if (existingEntry.status === 'fulfilled' && existingEntry.value?.seatId != null) {
-    console.log(`Already joined: seat=${existingEntry.value.seatId}`)
-    return { gameId, seatId: existingEntry.value.seatId, address }
+  const existingEntry = existingEntryRes.status === 'fulfilled' ? existingEntryRes.value : null
+  const isBackendJoined = existingEntry?.seatId != null
+  const isChainJoined = chainJoinedRes.status === 'fulfilled' ? chainJoinedRes.value : false
+
+  if (isBackendJoined && isChainJoined) {
+    console.log(`Already joined: seat=${existingEntry.seatId}`)
+    console.log(buildGameJoinLines(gameId).join('\n'))
+    return { gameId, seatId: existingEntry.seatId, address }
   }
 
-  // Extract fees
-  if (cfg.status !== 'fulfilled') throw new Error(`Failed to get game config: ${cfg.reason}`)
-  const ic = cfg.value.immutableConfig || {}
-  const entryFee = BigInt(ic.feeAmount     || '0')
-  const swapFee  = BigInt(ic.swapFeeAmount || '0')
-  if (swapFee === 0n) throw new Error('BLOCKED: swapFee is 0')
-  const totalFee = entryFee + swapFee
-
-  // Approve if needed
-  const currentAllowance = allowance.status === 'fulfilled' ? allowance.value : 0n
-  if (currentAllowance < totalFee) {
-    await chain.approve(signer, totalFee)
-  }
-
-  // Join on-chain
-  let joinTx
-  try {
-    const receipt = await chain.joinGame(signer, gameId, agentId)
-    joinTx = receipt.hash
-  } catch (err) {
-    if (/already joined/i.test(err.message || '') || /Already/i.test(err.message || '')) {
-      const recovered = await dealer.recoverEntry(gameId, address)
-      if (recovered?.seatId != null) {
-        console.log(`Already joined: seat=${recovered.seatId}`)
-        return { gameId, seatId: recovered.seatId, address }
+  if (isBackendJoined && !isChainJoined) {
+    let joinTx = null
+    try {
+      const [cfg, allowance] = await Promise.all([
+        dealer.getConfig(gameId),
+        chain.getAllowance(address),
+      ])
+      const ic = cfg.immutableConfig || {}
+      const entryFee = BigInt(ic.feeAmount     || '0')
+      const swapFee  = BigInt(ic.swapFeeAmount || '0')
+      if (swapFee === 0n) throw new Error('BLOCKED: swapFee is 0')
+      const totalFee = entryFee + swapFee
+      const currentAllowance = allowance ?? 0n
+      if (currentAllowance < totalFee) {
+        await chain.approve(signer, totalFee)
       }
+
+      joinTx = await chain.joinGame(signer, gameId, agentId)
+      joinTx = joinTx.hash
+    } catch (err) {
+      if (!isAlreadyJoinedError(err.message || '')) throw err
+      // Someone else may have joined on-chain in a concurrent attempt; proceed if this is just a state-sync case.
+      const recoveredTx = await chain.getJoinTxByPlayer(gameId, address)
+      if (!recoveredTx) throw err
+      joinTx = recoveredTx
     }
-    throw err
+
+    console.log(`Already joined backend entry exists, contract synced: seat=${existingEntry.seatId}`)
+    console.log(buildGameJoinLines(gameId).join('\n'))
+    return { gameId, seatId: existingEntry.seatId, address }
+  }
+
+  let joinTx
+  if (!isChainJoined) {
+    // Need to join on-chain this run.
+    const [cfg, allowance] = await Promise.all([
+      dealer.getConfig(gameId),
+      chain.getAllowance(address),
+    ])
+    const ic = cfg.immutableConfig || {}
+    const entryFee = BigInt(ic.feeAmount     || '0')
+    const swapFee  = BigInt(ic.swapFeeAmount || '0')
+    if (swapFee === 0n) throw new Error('BLOCKED: swapFee is 0')
+    const totalFee = entryFee + swapFee
+
+    // Approve if needed
+    const currentAllowance = allowance ?? 0n
+    if (currentAllowance < totalFee) {
+      await chain.approve(signer, totalFee)
+    }
+
+    try {
+      const receipt = await chain.joinGame(signer, gameId, agentId)
+      joinTx = receipt.hash
+    } catch (err) {
+      const msg = err.message || ''
+      if (!isAlreadyJoinedError(msg)) {
+        throw err
+      }
+      joinTx = await chain.getJoinTxByPlayer(gameId, address)
+      if (!joinTx) throw err
+    }
+  } else {
+    // Contract already joined, only backend entry is missing.
+    joinTx = await chain.getJoinTxByPlayer(gameId, address)
+    if (!joinTx) {
+      throw new Error('Contract joined but backend join ticket not found by event lookup, cannot recover automatically')
+    }
   }
 
   // Sign + submit to backend with joinKey
@@ -108,6 +156,7 @@ async function joinWithKey(gameId, joinKey) {
   if (entry.seatId == null) throw new Error(`BLOCKED: seatId not returned: ${JSON.stringify(entry)}`)
 
   console.log(`JOINED game=${gameId} seat=${entry.seatId}${entry.autoStart?.started ? ' STARTED' : ''}`)
+  console.log(buildGameJoinLines(gameId).join('\n'))
   return { gameId, seatId: entry.seatId, address }
 }
 
@@ -134,6 +183,7 @@ async function join(gameId, { joinKey } = {}) {
     const existing = await dealer.recoverEntry(gameId, address)
     if (existing?.seatId != null) {
       console.log(`Already joined: seat=${existing.seatId}`)
+      console.log(buildGameJoinLines(gameId).join('\n'))
       return { gameId, seatId: existing.seatId, address }
     }
   } catch { /* not joined yet */ }

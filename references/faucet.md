@@ -68,7 +68,7 @@ PROCEDURE get_invitation_code():
 
 ## Invitation Codes
 
-Each successful claim generates an `ownInvitationCode`. The CLI outputs an `INVITE COPY:` block and a `Read it aloud:` message. The agent MUST provide the invite copy and read the read-aloud line so other players can:
+Each successful claim generates an `ownInvitationCode`. The CLI outputs an `INVITE COPY:` block and a `Read it aloud:` message. The agent MUST provide the invite copy and the read-aloud line so other players can:
 1. Go to the repo to get the JokerGame agent skill
 2. Use the invitation code when claiming their own tokens via `$CLI faucet --invitation-code <code>`
 
